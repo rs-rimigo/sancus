@@ -15,7 +15,6 @@ pids
 *.pid
 *.seed
 *.pid.lock
-*.js
 build/*
 build/
 
