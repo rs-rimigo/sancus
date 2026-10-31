@@ -63,7 +63,8 @@ app.post(&#x27;/v1/orders&#x27;, rateLimit({
   methods: [POST]
   bypass: [AUTH]
   rateLimit: { perMinute: 5, key: IP, blockFor: 900 }</code></pre>
-<p>Each gateway worker also remembers callers it has just rejected, for the global IP limiter as well as route limits, until their <code>Retry-After</code> runs out. Repeat requests from them are answered from memory, without a Redis round trip, so a flood of rejected traffic does not land on Redis. Rejected requests were never counted, so this changes no limit. The memory holds at most 10,000 callers per worker.</p>
+<p>Each gateway worker also remembers callers it has just rejected, for the global IP limiter as well as route limits, until their <code>Retry-After</code> runs out. Repeat requests from them are answered from memory, re-checked with Redis at most every 5 seconds, so a flood of rejected traffic barely touches Redis and deleting a block in Redis (<code>blocked:ip:&lt;ip&gt;</code> or a route's <code>…:blocked</code> key) frees the caller within 5 seconds. Rejected requests were never counted, so this changes no limit. The memory holds at most 10,000 callers per worker.</p>
+<p>A route's day and minute limits are checked together in one atomic Redis call, and a request counts against both only if both allow it: a burst the minute limit turns away does not use up the day.</p>
 <p>Each window is a sliding-window counter: one small Redis hash per key holding this window's count and the last window's, with the last one weighted by how much of it still overlaps. That is the approximation Cloudflare uses; it needs three fields per key however many requests a user makes, where a sorted-set log stores one entry per request. It runs as one Lua script per window, sent as EVALSHA. The day window runs first, so a daily rejection does not consume a minute token.</p>
 
 <h2>Headers the client sees</h2>
