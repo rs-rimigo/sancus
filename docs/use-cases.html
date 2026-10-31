@@ -56,6 +56,32 @@
 <p>Five product teams each ship a service. The platform team owns the gateway, the verifier and the policy folder. Each product team owns one file in <code>api_configs/</code> and changes it in their own pull requests. CI runs <code>npm run check</code>, so a bad file never merges.</p>
 <p>When finance asked that every import require an idempotency key, the platform team wrote an eight-line policy and the finance team added two lines to their route. <code>/routes</code> shows what is live. <code>/metrics</code> breaks requests down by service and route, so each team has its own dashboard without writing any code.</p>
 
+<h2>Next to Kong and APISIX</h2>
+<p>Kong and APISIX are the two gateways teams most often weigh against Sancus. This is what each one does in its free, open-source build, from their documentation as of October 2026. Where Sancus is missing something, the row says so.</p>
+<table>
+<tr><th>Feature</th><th>Sancus</th><th>Kong Gateway (open source)</th><th>Apache APISIX</th></tr>
+<tr><td>Runtime</td><td>Node.js</td><td>OpenResty (nginx + LuaJIT)</td><td>OpenResty (nginx + LuaJIT)</td></tr>
+<tr><td>Where config lives</td><td>One YAML file per service, in your repo</td><td>PostgreSQL, or a declarative YAML file in DB-less mode</td><td>etcd, or a YAML file in standalone mode</td></tr>
+<tr><td>Picking up a change</td><td>Watches the files, no restart</td><td>Admin API (database mode); push the file to <code>/config</code> (DB-less)</td><td>Immediately from etcd; re-reads the file in standalone mode</td></tr>
+<tr><td>Stateful dependencies</td><td>Redis</td><td>PostgreSQL, or none in DB-less mode</td><td>etcd, or none in standalone mode</td></tr>
+<tr><td>Admin UI</td><td>None. <code>/routes</code> shows what is live</td><td>Kong Manager</td><td>APISIX Dashboard</td></tr>
+<tr><td>Custom logic in</td><td>TypeScript or JavaScript policies</td><td>Lua; Go, JavaScript, Python through the plugin server</td><td>Lua; Go, Java, Python through plugin runners; Wasm</td></tr>
+<tr><td>Token checks</td><td>Calls your verifier (ForwardAuth) and caches the answer in Redis. Does not check JWTs itself</td><td>key-auth, basic-auth, JWT, OAuth 2.0, HMAC, LDAP built in. OpenID Connect is Enterprise. No forward-auth plugin</td><td>key-auth, basic-auth, JWT, HMAC, LDAP, OpenID Connect and forward-auth built in</td></tr>
+<tr><td>Rate-limit algorithms</td><td>Per-IP token bucket, per-route sliding-window counter</td><td>Fixed window. Sliding window is in Rate Limiting Advanced (Enterprise)</td><td>Fixed window, sliding window (3.18 and later), leaky bucket, concurrency limit</td></tr>
+<tr><td>Limits shared across nodes</td><td>Redis</td><td>Redis, or the database</td><td>Redis or Redis Cluster</td></tr>
+<tr><td>Response cache</td><td>Stored in Redis, shared by every node</td><td>In memory on each node. Redis is in Proxy Cache Advanced (Enterprise)</td><td>In memory or on disk, on each node</td></tr>
+<tr><td>Stale-while-revalidate</td><td>Yes (<code>SWR</code> strategy)</td><td>No</td><td>Not offered</td></tr>
+<tr><td>Geo-fencing</td><td>GeoJSON polygons</td><td>No, IP restriction only</td><td>No, IP restriction only</td></tr>
+<tr><td>Circuit breaker</td><td>Per service</td><td>No plugin; active and passive health checks</td><td>api-breaker plugin; active and passive health checks</td></tr>
+<tr><td>Body rewriting</td><td>No. A policy can do it</td><td>request-transformer, response-transformer</td><td>body-transformer, response-rewrite</td></tr>
+<tr><td>Protocols</td><td>HTTP/1.1, SSE, multipart. No WebSocket or gRPC</td><td>HTTP, gRPC, WebSocket, TCP and UDP streams</td><td>HTTP, gRPC, WebSocket, TCP and UDP streams, MQTT, Dubbo</td></tr>
+<tr><td>Kubernetes</td><td>Manifests and Helm values. No Gateway API</td><td>Kong Ingress Controller, Gateway API</td><td>APISIX Ingress Controller, Gateway API</td></tr>
+<tr><td>Metrics</td><td>Prometheus <code>/metrics</code></td><td>Prometheus plugin</td><td>Prometheus plugin</td></tr>
+<tr><td>Throughput</td><td>27k req/s per process on an M4 laptop (<a href="benchmarks.html">chapter 5</a>)</td><td>Not measured here. nginx-based, usually more per core</td><td>Not measured here. nginx-based, usually more per core</td></tr>
+<tr><td>Licence</td><td>MIT, everything open</td><td>Apache 2.0, with paid Enterprise plugins</td><td>Apache 2.0, every plugin open</td></tr>
+</table>
+<p>The short version: Kong and APISIX do more, speak more protocols and carry more traffic per core. Sancus covers a narrower set, gives you a shared Redis cache with stale-while-revalidate and geo-fencing for free, and lets you extend it in the language a Node team already writes.</p>
+
 <h2>When another door fits better</h2>
 <table>
 <tr><th>You need</th><th>Look at</th><th>Because</th></tr>
