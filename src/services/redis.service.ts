@@ -134,6 +134,9 @@ class RedisService {
       maxRetriesPerRequest: 3,
       // Never give up: Redis restarts and failovers must heal without restarting the gateway.
       retryStrategy: (attempt) => Math.min(attempt * 200, 2000),
+      // Failover that keeps the TCP connection (the old primary demoted to a replica): writes answer
+      // READONLY. Reconnect so DNS/endpoint resolution finds the new primary, and resend the command.
+      reconnectOnError: (err) => (/READONLY/.test(err.message) ? 2 : false),
       lazyConnect: true,
       // Connection pool settings
       keepAlive: 30000, // Keep connections alive
@@ -185,9 +188,16 @@ class RedisService {
     });
   }
 
-  /** Trip the breaker when a command timed out. Other errors (closed connection) already fail fast. */
+  /**
+   * Trip the breaker when Redis cannot do its job: a timeout, or a server that answers but cannot
+   * serve writes (READONLY replica, LOADING, failover in progress). Tripping marks Redis unhealthy,
+   * so the outage alert fires instead of limits silently failing open. Closed connections already
+   * fail fast and are seen by `healthy`.
+   */
   public noteFailure(err: Error): void {
-    if (!/timed out/i.test(err?.message ?? '')) return;
+    const msg = err?.message ?? '';
+    if (!/timed out|READONLY|LOADING|MASTERDOWN|CLUSTERDOWN|TRYAGAIN/i.test(msg)) return;
+    this.lastError = msg.slice(0, 120);
     if (Date.now() >= this.skipUntil) {
       logger.warn({ backoffMs: this.backoffMs }, 'Redis is not answering: serving without cache, limits and token cache');
     }

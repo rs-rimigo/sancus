@@ -47,7 +47,9 @@ const TOKEN_BUCKET = defineScript('sancusIpBucket', 2, `
   local bucket = redis.call('HMGET', key, 'tokens', 'lastRefill')
   local tokens = tonumber(bucket[1]) or capacity
   local lastRefill = tonumber(bucket[2]) or now
-  tokens = math.min(capacity, tokens + ((now - lastRefill) / 1000) * refillRate)
+  -- A pod whose clock is behind must not refill backwards (or let the next pod over-refill).
+  tokens = math.min(capacity, tokens + (math.max(0, now - lastRefill) / 1000) * refillRate)
+  now = math.max(now, lastRefill)
 
   local allowed = 0
   local retryAfter = 0
@@ -73,7 +75,11 @@ class IPRateLimiter {
   private readonly blockDurationMs: number;
   private readonly trustedIpSet: Set<string>;
   // Blocked IPs this worker already knows about: answered with 403 without a Redis round trip.
-  private readonly blocked = new BlockCache<{ until: number }>();
+  // ponytail: kept at most 5 s per entry, so deleting `blocked:ip:<ip>` in Redis unblocks within 5 s.
+  private readonly blocked = new BlockCache<{ until: number; retryAt: number }>();
+  private rememberBlock(ip: string, retryAt: number): void {
+    this.blocked.set(ip, { until: Math.min(retryAt, Date.now() + 5_000), retryAt });
+  }
 
   constructor(options: IPRateLimiterOptions = {}) {
     this.capacity = options.capacity ?? Number(process.env.IP_RATE_LIMIT_CAPACITY ?? 200);
@@ -101,7 +107,7 @@ class IPRateLimiter {
     const shouldBlock = violations >= this.blockThreshold;
     if (shouldBlock) {
       await redis.set(`blocked:ip:${ip}`, String(now), 'PX', this.blockDurationMs);
-      this.blocked.set(ip, { until: now + this.blockDurationMs });
+      this.rememberBlock(ip, now + this.blockDurationMs);
       await redis.del(key, `ipratelimit:bucket:${ip}`);
       logger.warn({ ip, violations }, 'IP blocked for repeated rate-limit bursts');
     }
@@ -127,7 +133,7 @@ class IPRateLimiter {
       if (this.trustedIpSet.has(ip)) return next();
 
       const known = this.blocked.get(ip);
-      if (known) return this.forbid(res, known.until - Date.now());
+      if (known) return this.forbid(res, known.retryAt - Date.now());
 
       const redis = this.redisService.getClient();
       if (!redis) return next(); // fail open
@@ -139,7 +145,7 @@ class IPRateLimiter {
 
         if (allowed === 1) return next();
         if (allowed === -1) {
-          this.blocked.set(ip, { until: Date.now() + retryAfter }); // retryAfter is the block's remaining ms here
+          this.rememberBlock(ip, Date.now() + retryAfter); // retryAfter is the block's remaining ms here
           return this.forbid(res, retryAfter);
         }
 

@@ -46,6 +46,7 @@ if (ipLimiterEnabled && trustProxy === false) {
   logger.fatal('IP rate limiter is enabled but TRUST_PROXY=false. Set TRUST_PROXY to your proxy (e.g. 1, or a CIDR list) or set IP_RATE_LIMIT_ENABLED=false.');
   process.exit(1);
 }
+if (trustProxy === true) logger.warn('TRUST_PROXY=true trusts every X-Forwarded-For hop: clients can forge their IP and dodge per-IP limits. Use a hop count or CIDR list unless every hop is yours.');
 
 // The request chain every proxied request runs, in order. Express runs it for admin, geo and
 // anything the fast path below does not take; the fast path runs the same functions directly.
@@ -59,13 +60,13 @@ const corsHeaders = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 const ipLimiter = ipLimiterEnabled ? new IPRateLimiter().middleware() : undefined;
-const chainHead = [requestIdMiddleware, stripOwnedHeaders, drainHeader, accessLogger, metricsMiddleware, ...(ipLimiter ? [ipLimiter] : [])];
+// corsHeaders runs before the IP limiter so a browser sees its 429/403 instead of a CORS error.
+const chainHead = [requestIdMiddleware, stripOwnedHeaders, drainHeader, accessLogger, metricsMiddleware, corsHeaders, ...(ipLimiter ? [ipLimiter] : [])];
 
 chainHead.forEach((mw) => app.use(mw));
 // Proxied responses are compressed in ProxyService (native zlib, decided once from the upstream's
 // headers). The middleware stays only on the admin endpoints whose bodies can be large.
 if (COMPRESSION_ENABLED) app.use(['/metrics', '/routes'], compression({ threshold: COMPRESSION_THRESHOLD }));
-app.use(corsHeaders);
 
 app.use(AdminRoute);
 app.use('/api/geo', GeoFenceRoute);
@@ -87,7 +88,7 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => onErro
  * plain function calls.
  */
 const FAST_PATH = /^\/api\/(?!geo(?:[/?]|$))[^/?]/i; // case-insensitive, like Express's own matching
-const proxyChain = [...chainHead, corsHeaders, new CommonRequestController().pipeline];
+const proxyChain = [...chainHead, new CommonRequestController().pipeline];
 const appRequest = (app as any).request;
 const appResponse = (app as any).response;
 const queryParser = app.get('query parser fn') as (qs: string) => unknown;
